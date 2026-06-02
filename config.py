@@ -2,9 +2,9 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    ELEVENLABS_API_KEY: str
-    HEYGEN_API_KEY: str
-    KIE_API_KEY: str
+    ELEVENLABS_API_KEY: str = ""
+    HEYGEN_API_KEY: str = ""
+    KIE_API_KEY: str = ""
 
     MUSIC_LIBRARY_SIZE: int = 15      # Max songs before reusing instead of generating
     MUSIC_DIR: str = "/app/data/music"     # Persistent local music library
