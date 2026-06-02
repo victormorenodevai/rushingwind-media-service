@@ -8,12 +8,13 @@ from config import settings
 
 def _make_engine():
     url = settings.DATABASE_URL
-    if not url:
+    if not url or not url.startswith(("postgresql://", "postgresql+asyncpg://")):
         return None
-    # Railway injects postgresql://, asyncpg requires postgresql+asyncpg://
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return create_async_engine(url, echo=False)
+    url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    try:
+        return create_async_engine(url, echo=False)
+    except Exception:
+        return None
 
 
 engine = _make_engine()
