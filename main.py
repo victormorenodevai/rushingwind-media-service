@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import select
 
 from config import settings
-from database import get_session, init_db
+from database import engine as db_engine, get_session, init_db
 from db_models import MusicTrack, Production
 from models import (
     MusicPickRequest, MusicPickResponse,
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     os.makedirs(settings.STORAGE_DIR, exist_ok=True)
     os.makedirs(settings.MUSIC_DIR, exist_ok=True)
-    if settings.DATABASE_URL:
+    if db_engine is not None:
         await init_db()
         logger.info("Database tables ready")
     yield
