@@ -5,12 +5,18 @@ from sqlmodel import SQLModel
 
 from config import settings
 
-# Railway injects postgresql://, asyncpg requires postgresql+asyncpg://
-_url = settings.DATABASE_URL
-if _url.startswith("postgresql://"):
-    _url = _url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-engine = create_async_engine(_url, echo=False)
+def _make_engine():
+    url = settings.DATABASE_URL
+    if not url:
+        return None
+    # Railway injects postgresql://, asyncpg requires postgresql+asyncpg://
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return create_async_engine(url, echo=False)
+
+
+engine = _make_engine()
 
 
 async def init_db() -> None:
