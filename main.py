@@ -1,19 +1,27 @@
 import logging
 import os
 import random
+import shutil
 import tempfile
 import time
+import uuid
 from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from sqlmodel import select
 
 from config import settings
 from database import get_session, init_db
 from db_models import MusicTrack, Production
-from models import MusicPickRequest, MusicPickResponse, VideoRequest, VideoResponse
-from pipeline import cleanup, elevenlabs, ffmpeg_mixer, gdrive, heygen, kie_music, subtitles
+from models import (
+    MusicPickRequest, MusicPickResponse,
+    VideoRequest, VideoResponse,
+    ProcessVideoRequest, ProcessVideoResponse,
+    ProductionCreate,
+)
+from pipeline import cleanup, elevenlabs, ffmpeg_mixer, heygen, kie_music, subtitles
 
 logging.basicConfig(level=settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -21,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    os.makedirs(settings.STORAGE_DIR, exist_ok=True)
+    os.makedirs(settings.MUSIC_DIR, exist_ok=True)
     if settings.DATABASE_URL:
         await init_db()
         logger.info("Database tables ready")
@@ -45,60 +55,91 @@ async def list_productions(limit: int = 20, language_code: str | None = None):
     return results
 
 
+@app.post("/productions", status_code=201)
+async def create_production(req: ProductionCreate):
+    """Called by n8n after Drive upload is confirmed — registers production in DB."""
+    if not settings.DATABASE_URL:
+        raise HTTPException(status_code=503, detail="Database not configured")
+    async with get_session() as session:
+        prod = Production(
+            language=req.language,
+            language_code=req.language_code,
+            title=req.title,
+            video_url=req.video_url,
+            video_drive_file_id=req.video_drive_file_id,
+            music_track_id=req.music_track_id,
+            music_reused=req.music_reused,
+            pipeline_seconds=req.pipeline_seconds,
+        )
+        session.add(prod)
+        await session.commit()
+        await session.refresh(prod)
+    return prod
+
+
+@app.get("/files/{file_id}")
+async def download_file(file_id: str):
+    """Serve a produced video so n8n can download it and upload to Drive."""
+    if not all(c.isalnum() or c == "-" for c in file_id):
+        raise HTTPException(status_code=400, detail="Invalid file_id")
+    path = os.path.join(settings.STORAGE_DIR, f"{file_id}.mp4")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File not found or already deleted")
+    return FileResponse(path, media_type="video/mp4", filename=f"{file_id}.mp4")
+
+
+@app.delete("/files/{file_id}", status_code=204)
+async def delete_file(file_id: str):
+    """Delete temp file after n8n has successfully uploaded it to Drive."""
+    if not all(c.isalnum() or c == "-" for c in file_id):
+        raise HTTPException(status_code=400, detail="Invalid file_id")
+    path = os.path.join(settings.STORAGE_DIR, f"{file_id}.mp4")
+    if os.path.exists(path):
+        os.remove(path)
+        logger.info("Deleted temp file: %s", file_id)
+
+
 @app.post("/pick-music", response_model=MusicPickResponse)
 async def pick_music(req: MusicPickRequest):
-    """Resolve music once before launching parallel /produce-video calls."""
-    tmp_dir = tempfile.mkdtemp(prefix="rw_music_")
+    """Pick or generate a music track from the local library."""
     try:
-        music_full_path = os.path.join(tmp_dir, "music_full.mp3")
-        library_folder = settings.GDRIVE_MUSIC_LIBRARY_FOLDER_ID
-
-        # Query DB for current library (fast — no Drive API call)
         async with get_session() as session:
             tracks = (await session.exec(select(MusicTrack))).all()
         library_count = len(tracks)
 
         if tracks and library_count >= settings.MUSIC_LIBRARY_SIZE:
-            # Library full — pick a random track and download from Drive
             track = random.choice(tracks)
-            gdrive.download_file(track.drive_file_id, music_full_path, settings.GDRIVE_CREDENTIALS_JSON)
             async with get_session() as session:
                 t = await session.get(MusicTrack, track.id)
                 t.times_used += 1
                 session.add(t)
                 await session.commit()
-            logger.info("pick_music: reused %s (used %d times)", track.filename, track.times_used + 1)
+            logger.info("pick_music: reused %s (used %d times)", track.filename, t.times_used)
             return MusicPickResponse(
-                music_drive_url=f"https://drive.google.com/uc?export=download&id={track.drive_file_id}",
-                music_drive_file_id=track.drive_file_id,
+                music_filename=track.filename,
+                music_track_id=track.id,
                 reused=True,
                 library_count=library_count,
             )
         else:
-            # Library incomplete — generate a new song with KIE
-            if not library_folder:
-                raise RuntimeError("GDRIVE_MUSIC_LIBRARY_FOLDER_ID not set — cannot store music")
+            song_name = f"song_{library_count + 1:03d}.mp3"
+            dest_path = os.path.join(settings.MUSIC_DIR, song_name)
             await kie_music.generate_and_download(
                 req.music_style_prompt,
-                music_full_path,
+                dest_path,
                 settings.KIE_API_KEY,
                 timeout_seconds=settings.KIE_POLL_TIMEOUT,
             )
-            song_name = f"song_{library_count + 1:03d}.mp3"
-            file_id, _ = gdrive.upload_file(
-                music_full_path, song_name, library_folder,
-                settings.GDRIVE_CREDENTIALS_JSON, mimetype="audio/mpeg",
-            )
             async with get_session() as session:
-                track = MusicTrack(drive_file_id=file_id, filename=song_name)
+                track = MusicTrack(filename=song_name)
                 session.add(track)
                 await session.commit()
                 await session.refresh(track)
             library_count += 1
             logger.info("pick_music: new song saved %s (%d total)", song_name, library_count)
             return MusicPickResponse(
-                music_drive_url=f"https://drive.google.com/uc?export=download&id={file_id}",
-                music_drive_file_id=file_id,
+                music_filename=song_name,
+                music_track_id=track.id,
                 reused=False,
                 library_count=library_count,
             )
@@ -107,13 +148,11 @@ async def pick_music(req: MusicPickRequest):
         logger.exception("pick_music failed: %s", exc)
         raise HTTPException(status_code=500, detail={"status": "failed", "error": str(exc)})
 
-    finally:
-        cleanup.delete_dir(tmp_dir)
-
 
 @app.post("/produce-video", response_model=VideoResponse)
 async def produce_video(req: VideoRequest):
     logger.info("Starting video production [%s]", req.language)
+    file_id = str(uuid.uuid4())
     tmp_dir = tempfile.mkdtemp(prefix=f"rw_{req.language_code}_")
     temp_files: list[str] = []
     steps_done: list[str] = []
@@ -131,13 +170,11 @@ async def produce_video(req: VideoRequest):
         steps_done.append("tts")
         logger.info("[%s] TTS done", req.language)
 
-        # Step 2: HeyGen — upload audio asset, generate video, poll, download
+        # Step 2: HeyGen
         asset_id = await heygen.upload_audio_asset(audio_bytes, settings.HEYGEN_API_KEY)
         video_id = await heygen.generate_video(asset_id, req.avatar_id, settings.HEYGEN_API_KEY)
         heygen_url = await heygen.poll_until_complete(
-            video_id,
-            settings.HEYGEN_API_KEY,
-            timeout_seconds=settings.HEYGEN_POLL_TIMEOUT,
+            video_id, settings.HEYGEN_API_KEY, timeout_seconds=settings.HEYGEN_POLL_TIMEOUT,
         )
         raw_video_path = os.path.join(tmp_dir, "raw.mp4")
         await heygen.download_video(heygen_url, raw_video_path, settings.HEYGEN_API_KEY)
@@ -145,151 +182,189 @@ async def produce_video(req: VideoRequest):
         steps_done.append("heygen")
         logger.info("[%s] HeyGen done", req.language)
 
-        # Step 3: Music — use URL provided by /pick-music, or fall back to library logic
-        music_full_path = os.path.join(tmp_dir, "music_full.mp3")
-        music_reused = False
-        music_library_count = 0
-        music_track_id: int | None = None
-
-        if req.music_drive_url:
-            # n8n called /pick-music first and passed the URL — just download it
-            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-                async with client.stream("GET", req.music_drive_url) as resp:
-                    resp.raise_for_status()
-                    with open(music_full_path, "wb") as f:
-                        async for chunk in resp.aiter_bytes(65536):
-                            f.write(chunk)
-            music_reused = True
-            steps_done.append("music_from_url")
-            logger.info("[%s] Music downloaded from provided URL", req.language)
+        # Step 3: Music
+        if req.music_filename:
+            music_full_path = os.path.join(settings.MUSIC_DIR, req.music_filename)
+            if not os.path.exists(music_full_path):
+                raise FileNotFoundError(f"Music file not found: {req.music_filename}")
+            steps_done.append("music_from_local")
         else:
-            # Standalone call — resolve music internally via library
-            library_folder = settings.GDRIVE_MUSIC_LIBRARY_FOLDER_ID
-            if library_folder:
-                songs = gdrive.list_mp3s(library_folder, settings.GDRIVE_CREDENTIALS_JSON)
-                music_library_count = len(songs)
+            music_full_path = os.path.join(tmp_dir, "music_full.mp3")
+            await kie_music.generate_and_download(
+                req.music_style_prompt, music_full_path,
+                settings.KIE_API_KEY, timeout_seconds=settings.KIE_POLL_TIMEOUT,
+            )
+            temp_files.append(music_full_path)
+            steps_done.append("kie_music_new")
+        logger.info("[%s] Music ready", req.language)
 
-            async with get_session() as session:
-                tracks = (await session.exec(select(MusicTrack))).all()
-                music_library_count = len(tracks)
-
-            if tracks and music_library_count >= settings.MUSIC_LIBRARY_SIZE:
-                track = random.choice(tracks)
-                gdrive.download_file(track.drive_file_id, music_full_path, settings.GDRIVE_CREDENTIALS_JSON)
-                music_track_id = track.id
-                music_reused = True
-                steps_done.append("kie_music_reused")
-                logger.info("[%s] Music reused: %s", req.language, track.filename)
-            else:
-                await kie_music.generate_and_download(
-                    req.music_style_prompt,
-                    music_full_path,
-                    settings.KIE_API_KEY,
-                    timeout_seconds=settings.KIE_POLL_TIMEOUT,
-                )
-                if library_folder:
-                    song_name = f"song_{music_library_count + 1:03d}.mp3"
-                    new_file_id, _ = gdrive.upload_file(
-                        music_full_path, song_name, library_folder,
-                        settings.GDRIVE_CREDENTIALS_JSON, mimetype="audio/mpeg",
-                    )
-                    async with get_session() as session:
-                        new_track = MusicTrack(drive_file_id=new_file_id, filename=song_name)
-                        session.add(new_track)
-                        await session.commit()
-                        await session.refresh(new_track)
-                    music_track_id = new_track.id
-                    music_library_count += 1
-                    logger.info("[%s] New song saved: %s (%d total)", req.language, song_name, music_library_count)
-                steps_done.append("kie_music_new")
-
-        temp_files.append(music_full_path)
-
-        # Trim music to video duration + 2s (smooth fade-out)
+        # Step 4: Trim + mix
         video_duration = ffmpeg_mixer.get_duration(raw_video_path)
         music_trim_path = os.path.join(tmp_dir, "music_trim.mp3")
         ffmpeg_mixer.trim_audio(music_full_path, music_trim_path, video_duration + 2.0)
         temp_files.append(music_trim_path)
 
-        # Step 4: FFmpeg — mix voice video with background music
         mixed_path = os.path.join(tmp_dir, "mixed.mp4")
         ffmpeg_mixer.mix_audio(raw_video_path, music_trim_path, mixed_path)
         temp_files.append(mixed_path)
         steps_done.append("ffmpeg_mix")
         logger.info("[%s] FFmpeg mix done", req.language)
 
-        # Step 5: faster-whisper — generate karaoke ASS subtitle file
+        # Step 5: Subtitles
         ass_path = os.path.join(tmp_dir, "subs.ass")
         subtitles.generate_ass(raw_video_path, req.language_code, ass_path)
         temp_files.append(ass_path)
         steps_done.append("subtitles")
         logger.info("[%s] Subtitles done", req.language)
 
-        # Step 6: FFmpeg — burn subtitles into video
-        final_path = os.path.join(tmp_dir, "final.mp4")
-        ffmpeg_mixer.burn_subtitles(mixed_path, ass_path, final_path)
-        temp_files.append(final_path)
+        # Step 6: Burn subtitles
+        subs_path = os.path.join(tmp_dir, "subs_burned.mp4")
+        ffmpeg_mixer.burn_subtitles(mixed_path, ass_path, subs_path)
+        temp_files.append(subs_path)
         steps_done.append("ffmpeg_burn")
-        logger.info("[%s] FFmpeg subtitle burn done", req.language)
 
-        # Step 7: Upload to Google Drive
-        file_id = gdrive.upload_video(
-            final_path,
-            f"{req.title}.mp4",
-            req.drive_folder_id,
-            settings.GDRIVE_CREDENTIALS_JSON,
-        )
-        steps_done.append("gdrive_upload")
-        logger.info("[%s] Drive upload done → %s", req.language, file_id)
+        # Step 7: Watermark
+        upload_path = subs_path
+        if settings.LOGO_PATH and os.path.exists(settings.LOGO_PATH):
+            wm_path = os.path.join(tmp_dir, "watermarked.mp4")
+            ffmpeg_mixer.add_watermark(subs_path, settings.LOGO_PATH, wm_path)
+            temp_files.append(wm_path)
+            upload_path = wm_path
+            steps_done.append("watermark")
 
-        # Record production in DB
-        if settings.DATABASE_URL:
-            async with get_session() as session:
-                prod = Production(
-                    language=req.language,
-                    language_code=req.language_code,
-                    title=req.title,
-                    video_url=f"https://drive.google.com/uc?export=download&id={file_id}",
-                    video_drive_file_id=file_id,
-                    music_track_id=music_track_id,
-                    music_reused=music_reused,
-                    pipeline_seconds=int(time.monotonic() - start),
-                )
-                session.add(prod)
-                await session.commit()
+        # Step 8: Save to storage — n8n downloads, uploads to Drive, then calls DELETE + POST /productions
+        final_path = os.path.join(settings.STORAGE_DIR, f"{file_id}.mp4")
+        shutil.copy2(upload_path, final_path)
+        steps_done.append("saved_to_storage")
+        logger.info("[%s] Saved to storage → %s", req.language, file_id)
 
         return VideoResponse(
             status="complete",
             language=req.language,
-            video_url=f"https://drive.google.com/uc?export=download&id={file_id}",
-            drive_file_id=file_id,
+            file_id=file_id,
+            download_url=f"{settings.BASE_URL}/files/{file_id}",
             duration_seconds=int(time.monotonic() - start),
             steps_completed=steps_done,
-            music_reused=music_reused,
-            music_library_count=music_library_count,
+            music_reused=req.music_filename is not None,
         )
 
     except Exception as exc:
         failed_at = _next_step(steps_done)
         logger.exception("[%s] Failed at %s: %s", req.language, failed_at, exc)
+        _cleanup_storage(file_id)
         raise HTTPException(
             status_code=500,
-            detail={
-                "status": "failed",
-                "language": req.language,
-                "failed_at": failed_at,
-                "error": str(exc),
-                "steps_completed": steps_done,
-            },
+            detail={"status": "failed", "language": req.language, "failed_at": failed_at,
+                    "error": str(exc), "steps_completed": steps_done},
         )
-
     finally:
         cleanup.delete_files(temp_files)
         cleanup.delete_dir(tmp_dir)
 
 
+@app.post("/process-video", response_model=ProcessVideoResponse)
+async def process_video(req: ProcessVideoRequest):
+    """Post-produce a pastor-recorded video: add music, subtitles, logo, save locally."""
+    logger.info("Starting process-video [%s] — %s", req.language_code, req.title)
+    file_id = str(uuid.uuid4())
+    tmp_dir = tempfile.mkdtemp(prefix="rw_proc_")
+    temp_files: list[str] = []
+    steps_done: list[str] = []
+    start = time.monotonic()
+
+    try:
+        # Step 1: Download input video
+        input_path = os.path.join(tmp_dir, "input.mp4")
+        async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
+            async with client.stream("GET", req.video_url) as resp:
+                resp.raise_for_status()
+                with open(input_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(65536):
+                        f.write(chunk)
+        temp_files.append(input_path)
+        steps_done.append("download")
+
+        # Step 2: Music
+        if req.music_filename:
+            music_full_path = os.path.join(settings.MUSIC_DIR, req.music_filename)
+            if not os.path.exists(music_full_path):
+                raise FileNotFoundError(f"Music file not found: {req.music_filename}")
+            steps_done.append("music_from_local")
+        else:
+            music_full_path = os.path.join(tmp_dir, "music_full.mp3")
+            await kie_music.generate_and_download(
+                req.music_style_prompt, music_full_path,
+                settings.KIE_API_KEY, timeout_seconds=settings.KIE_POLL_TIMEOUT,
+            )
+            temp_files.append(music_full_path)
+            steps_done.append("kie_music_new")
+
+        # Step 3: Trim + mix
+        video_duration = ffmpeg_mixer.get_duration(input_path)
+        music_trim_path = os.path.join(tmp_dir, "music_trim.mp3")
+        ffmpeg_mixer.trim_audio(music_full_path, music_trim_path, video_duration + 2.0)
+        temp_files.append(music_trim_path)
+
+        mixed_path = os.path.join(tmp_dir, "mixed.mp4")
+        ffmpeg_mixer.mix_audio(input_path, music_trim_path, mixed_path)
+        temp_files.append(mixed_path)
+        steps_done.append("ffmpeg_mix")
+
+        # Step 4: Subtitles
+        ass_path = os.path.join(tmp_dir, "subs.ass")
+        subtitles.generate_ass(input_path, req.language_code, ass_path)
+        temp_files.append(ass_path)
+        steps_done.append("subtitles")
+
+        # Step 5: Burn subtitles
+        subs_path = os.path.join(tmp_dir, "subs_burned.mp4")
+        ffmpeg_mixer.burn_subtitles(mixed_path, ass_path, subs_path)
+        temp_files.append(subs_path)
+        steps_done.append("ffmpeg_burn")
+
+        # Step 6: Watermark
+        upload_path = subs_path
+        if settings.LOGO_PATH and os.path.exists(settings.LOGO_PATH):
+            wm_path = os.path.join(tmp_dir, "watermarked.mp4")
+            ffmpeg_mixer.add_watermark(subs_path, settings.LOGO_PATH, wm_path)
+            temp_files.append(wm_path)
+            upload_path = wm_path
+            steps_done.append("watermark")
+
+        # Step 7: Save to storage — n8n downloads, uploads to Drive, then calls DELETE + POST /productions
+        final_path = os.path.join(settings.STORAGE_DIR, f"{file_id}.mp4")
+        shutil.copy2(upload_path, final_path)
+        steps_done.append("saved_to_storage")
+        logger.info("Saved to storage → %s", file_id)
+
+        return ProcessVideoResponse(
+            status="complete",
+            file_id=file_id,
+            download_url=f"{settings.BASE_URL}/files/{file_id}",
+            duration_seconds=int(time.monotonic() - start),
+            steps_completed=steps_done,
+        )
+
+    except Exception as exc:
+        logger.exception("process_video failed: %s", exc)
+        _cleanup_storage(file_id)
+        raise HTTPException(status_code=500, detail={
+            "status": "failed", "error": str(exc), "steps_completed": steps_done,
+        })
+    finally:
+        cleanup.delete_files(temp_files)
+        cleanup.delete_dir(tmp_dir)
+
+
+def _cleanup_storage(file_id: str) -> None:
+    path = os.path.join(settings.STORAGE_DIR, f"{file_id}.mp4")
+    if os.path.exists(path):
+        os.remove(path)
+
+
 def _next_step(steps_done: list[str]) -> str:
-    order = ["tts", "heygen", "kie_music_new", "kie_music_reused", "ffmpeg_mix", "subtitles", "ffmpeg_burn", "gdrive_upload"]
+    order = ["tts", "heygen", "music_from_local", "kie_music_new",
+             "ffmpeg_mix", "subtitles", "ffmpeg_burn", "watermark", "saved_to_storage"]
     for step in order:
         if step not in steps_done:
             return step

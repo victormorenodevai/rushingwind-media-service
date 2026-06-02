@@ -5,14 +5,15 @@ class Settings(BaseSettings):
     ELEVENLABS_API_KEY: str
     HEYGEN_API_KEY: str
     KIE_API_KEY: str
-    GDRIVE_CREDENTIALS_JSON: str   # Full service account JSON as a string
 
-    GDRIVE_MUSIC_LIBRARY_FOLDER_ID: str = ""  # Drive folder for music library (empty = always generate)
-    MUSIC_LIBRARY_SIZE: int = 15              # Max songs before reusing instead of generating
+    MUSIC_LIBRARY_SIZE: int = 15      # Max songs before reusing instead of generating
+    MUSIC_DIR: str = "/app/data/music"     # Persistent local music library
+    STORAGE_DIR: str = "/app/data/storage" # Temp dir for produced videos (n8n downloads from here)
+    BASE_URL: str = ""                # Public URL of this service, e.g. https://your-service.up.railway.app
 
-    DATABASE_URL: str = ""                    # Injected by Railway Postgres plugin
+    DATABASE_URL: str = ""            # Injected by Railway Postgres plugin
 
-    KIE_CALLBACK_URL: str = ""          # Set to https://your-media-service.up.railway.app/music-callback
+    LOGO_PATH: str = "/app/assets/rw-logo.png"
 
     HEYGEN_POLL_TIMEOUT: int = 1500   # seconds (25 min)
     KIE_POLL_TIMEOUT: int = 600       # seconds (10 min)

@@ -7,8 +7,7 @@ class MusicTrack(SQLModel, table=True):
     __tablename__ = "music_tracks"
 
     id: int | None = Field(default=None, primary_key=True)
-    drive_file_id: str = Field(unique=True, index=True)
-    filename: str
+    filename: str = Field(unique=True, index=True)  # local filename in MUSIC_DIR
     times_used: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
