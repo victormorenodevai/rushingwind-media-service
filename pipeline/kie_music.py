@@ -3,6 +3,8 @@ import logging
 import time
 import httpx
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 KIE_GENERATE_URL = "https://api.kie.ai/api/v1/generate"
@@ -34,6 +36,7 @@ async def _submit_music(style_prompt: str, api_key: str) -> str:
         "customMode": True,
         "instrumental": True,
         "model": KIE_MODEL,
+        "callBackUrl": f"{settings.BASE_URL}/kie-callback",
     }
 
     async with httpx.AsyncClient(timeout=30) as client:

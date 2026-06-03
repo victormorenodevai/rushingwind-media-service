@@ -45,6 +45,12 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/kie-callback")
+async def kie_callback(payload: dict):
+    logger.info("KIE callback received: %s", payload)
+    return {"status": "ok"}
+
+
 @app.get("/productions")
 async def list_productions(limit: int = 20, language_code: str | None = None):
     async with get_session() as session:
