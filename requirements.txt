@@ -10,3 +10,4 @@ google-auth==2.37.0
 google-auth-oauthlib==1.2.1
 sqlmodel>=0.0.19
 asyncpg>=0.29
+aiofiles>=23.2
