@@ -60,3 +60,9 @@ class ProductionCreate(BaseModel):
     music_track_id: int | None = None
     music_reused: bool = False
     pipeline_seconds: int = 0
+
+
+class MusicTrackUpdate(BaseModel):
+    """Body for PATCH /music-tracks/{id} — called by n8n after uploading new track to Drive."""
+    drive_file_id: str
+    audio_url: str

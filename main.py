@@ -20,7 +20,7 @@ from models import (
     MusicPickRequest, MusicPickResponse,
     VideoRequest, VideoResponse,
     ProcessVideoRequest, ProcessVideoResponse,
-    ProductionCreate,
+    ProductionCreate, MusicTrackUpdate,
 )
 from pipeline import cleanup, elevenlabs, ffmpeg_mixer, heygen, kie_music, subtitles
 
@@ -105,6 +105,34 @@ async def delete_file(file_id: str):
     if os.path.exists(path):
         os.remove(path)
         logger.info("Deleted temp file: %s", file_id)
+
+
+@app.get("/music/{filename}")
+async def serve_music(filename: str):
+    """Serve a music file so n8n can download it and upload to Drive."""
+    if not all(c.isalnum() or c in "-_." for c in filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    path = os.path.join(settings.MUSIC_DIR, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Music file not found")
+    return FileResponse(path, media_type="audio/mpeg", filename=filename)
+
+
+@app.patch("/music-tracks/{track_id}", status_code=200)
+async def update_music_track(track_id: int, req: MusicTrackUpdate):
+    """Called by n8n after uploading a new track to Drive — stores the Drive URL."""
+    if not settings.DATABASE_URL:
+        raise HTTPException(status_code=503, detail="Database not configured")
+    async with get_session() as session:
+        track = await session.get(MusicTrack, track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Track not found")
+        track.drive_file_id = req.drive_file_id
+        track.audio_url = req.audio_url
+        session.add(track)
+        await session.commit()
+        await session.refresh(track)
+    return track
 
 
 @app.post("/pick-music", response_model=MusicPickResponse)
