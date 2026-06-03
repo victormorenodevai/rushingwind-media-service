@@ -4,6 +4,8 @@ from typing import Generator
 
 from faster_whisper import WhisperModel
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 WORDS_PER_LINE = 3
@@ -14,15 +16,16 @@ MARGIN_V = 250  # px desde el borde inferior — sube para subir el texto
 MARGIN_L = 50   # px desde el borde izquierdo
 MARGIN_R = 50   # px desde el borde derecho
 
-# Loaded once at module level — startup cost ~3s on CPU, not per-request
+# Loaded once at module level — heavy model, not per-request
 _model: WhisperModel | None = None
 
 
 def _get_model() -> WhisperModel:
     global _model
     if _model is None:
-        logger.info("Loading faster-whisper model (base, CPU)")
-        _model = WhisperModel("base", device="cpu", compute_type="int8")
+        model_name = settings.WHISPER_MODEL
+        logger.info("Loading faster-whisper model (%s, CPU)", model_name)
+        _model = WhisperModel(model_name, device="cpu", compute_type="int8")
     return _model
 
 
@@ -64,6 +67,8 @@ def generate_ass(video_path: str, language_code: str, output_path: str) -> str:
         video_path,
         language=language_code,
         word_timestamps=True,
+        vad_filter=True,      # skip silence / background-only sections
+        beam_size=5,
     )
 
     all_words = []

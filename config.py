@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""            # Injected by Railway Postgres plugin
 
     LOGO_PATH: str = "/app/assets/rw-logo.png"
+    WHISPER_MODEL: str = "large-v3"    # tiny | base | small | medium | large-v2 | large-v3
 
     HEYGEN_POLL_TIMEOUT: int = 1500   # seconds (25 min)
     KIE_POLL_TIMEOUT: int = 600       # seconds (10 min)
