@@ -6,6 +6,7 @@ import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -76,6 +77,7 @@ async def create_production(req: ProductionCreate):
             music_track_id=req.music_track_id,
             music_reused=req.music_reused,
             pipeline_seconds=req.pipeline_seconds,
+            created_at=datetime.utcnow(),
         )
         session.add(prod)
         await session.commit()
@@ -137,7 +139,7 @@ async def pick_music(req: MusicPickRequest):
                 timeout_seconds=settings.KIE_POLL_TIMEOUT,
             )
             async with get_session() as session:
-                track = MusicTrack(filename=song_name)
+                track = MusicTrack(filename=song_name, created_at=datetime.utcnow())
                 session.add(track)
                 await session.commit()
                 await session.refresh(track)
