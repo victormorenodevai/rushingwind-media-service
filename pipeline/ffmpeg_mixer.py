@@ -87,28 +87,28 @@ def add_watermark(
     video_path: str,
     watermark_path: str,
     output_path: str,
-    size: int = 120,         # ancho del logo en px (alto se escala proporcional)
-    margin_top: int = 270,   # px desde arriba — 90 evita la barra de TikTok/Reels (~80px)
-    margin_right: int = 80,  # px desde la derecha
-    opacity: float = 0.85,   # 0.0 = invisible, 1.0 = opaco
+    size_pct: float = 0.11,         # % del ancho del video
+    margin_top_pct: float = 0.14,   # % del alto del video desde arriba
+    margin_right_pct: float = 0.07, # % del ancho del video desde la derecha
+    opacity: float = 0.85,
 ) -> None:
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Input video missing: {video_path}")
     if not os.path.exists(watermark_path):
         raise FileNotFoundError(f"Watermark image missing: {watermark_path}")
 
-    # Escala el logo, lo posiciona arriba-derecha y ajusta opacidad
-    vf = (
-        f"movie={os.path.abspath(watermark_path)},scale={size}:-1,"
-        f"format=rgba,colorchannelmixer=aa={opacity}"
-        f"[wm];[in][wm]overlay=W-w-{margin_right}:{margin_top}"
+    # scale2ref scales logo relative to video width, overlay uses % of video dims
+    filtergraph = (
+        f"[1:v][0:v]scale2ref=w='iw*{size_pct}':h=-1[wm][base];"
+        f"[wm]format=rgba,colorchannelmixer=aa={opacity}[wma];"
+        f"[base][wma]overlay=W-w-W*{margin_right_pct}:H*{margin_top_pct}"
     )
 
     _run(
         [
-            "ffmpeg", "-i", video_path,
-            "-vf", vf,
-            "-c:a", "copy",
+            "ffmpeg", "-i", video_path, "-i", watermark_path,
+            "-filter_complex", filtergraph,
+            "-map", "0:a?", "-c:a", "copy",
             output_path, "-y",
         ],
         "add_watermark",
