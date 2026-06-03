@@ -51,7 +51,7 @@ async def list_productions(limit: int = 20, language_code: str | None = None):
         query = select(Production).order_by(Production.created_at.desc()).limit(limit)
         if language_code:
             query = query.where(Production.language_code == language_code)
-        results = (await session.exec(query)).all()
+        results = (await session.execute(query)).scalars().all()
     return results
 
 
@@ -104,7 +104,7 @@ async def pick_music(req: MusicPickRequest):
     """Pick or generate a music track from the local library."""
     try:
         async with get_session() as session:
-            tracks = (await session.exec(select(MusicTrack))).all()
+            tracks = (await session.execute(select(MusicTrack))).scalars().all()
         library_count = len(tracks)
 
         if tracks and library_count >= settings.MUSIC_LIBRARY_SIZE:
