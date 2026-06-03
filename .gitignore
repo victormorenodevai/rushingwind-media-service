@@ -12,4 +12,6 @@ env/
 dist/
 build/
 .pytest_cache/
-assets/
+assets/*.mp4
+assets/*.mp3
+assets/*.mov
