@@ -83,6 +83,21 @@ def burn_subtitles(video_path: str, ass_path: str, output_path: str) -> None:
     logger.info("Subtitles burned into %s", output_path)
 
 
+def _get_video_dimensions(media_path: str) -> tuple[int, int]:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json", media_path,
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe dimensions failed: {result.stderr[:500]}")
+    stream = json.loads(result.stdout)["streams"][0]
+    return stream["width"], stream["height"]
+
+
 def add_watermark(
     video_path: str,
     watermark_path: str,
@@ -97,20 +112,26 @@ def add_watermark(
     if not os.path.exists(watermark_path):
         raise FileNotFoundError(f"Watermark image missing: {watermark_path}")
 
-    # scale2ref scales logo relative to video width, overlay uses % of video dims
-    filtergraph = (
-        f"[1:v][0:v]scale2ref=w='iw*{size_pct}':h=-1[wm][base];"
-        f"[wm]format=rgba,colorchannelmixer=aa={opacity}[wma];"
-        f"[base][wma]overlay=W-w-W*{margin_right_pct}:H*{margin_top_pct}"
+    vid_w, vid_h = _get_video_dimensions(video_path)
+    logo_w  = int(vid_w * size_pct)
+    margin_r = int(vid_w * margin_right_pct)
+    margin_t = int(vid_h * margin_top_pct)
+
+    # scale logo to absolute px (h=-1 keeps aspect ratio), then overlay top-right
+    vf = (
+        f"movie={os.path.abspath(watermark_path)},"
+        f"scale={logo_w}:-1,"
+        f"format=rgba,colorchannelmixer=aa={opacity}"
+        f"[wm];[in][wm]overlay=W-w-{margin_r}:{margin_t}"
     )
 
     _run(
         [
-            "ffmpeg", "-i", video_path, "-i", watermark_path,
-            "-filter_complex", filtergraph,
-            "-map", "0:a?", "-c:a", "copy",
+            "ffmpeg", "-i", video_path,
+            "-vf", vf,
+            "-c:a", "copy",
             output_path, "-y",
         ],
         "add_watermark",
     )
-    logger.info("Watermark added to %s", output_path)
+    logger.info("Watermark added (%dx%d video, logo_w=%dpx) → %s", vid_w, vid_h, logo_w, output_path)
