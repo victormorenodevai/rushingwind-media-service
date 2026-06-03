@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     HEYGEN_POLL_TIMEOUT: int = 1500   # seconds (25 min)
     KIE_POLL_TIMEOUT: int = 600       # seconds (10 min)
     LOG_LEVEL: str = "INFO"
+    N8N_FORM_WEBHOOK_URL: str = ""  # Called server-side after pastor uploads video
 
     class Config:
         env_file = ".env"

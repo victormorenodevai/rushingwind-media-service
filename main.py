@@ -9,8 +9,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import httpx
+from pydantic import BaseModel
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlmodel import select
 
 from config import settings
@@ -105,6 +106,43 @@ async def delete_file(file_id: str):
     if os.path.exists(path):
         os.remove(path)
         logger.info("Deleted temp file: %s", file_id)
+
+
+_UPLOAD_PAGE: str | None = None
+
+@app.get("/upload", response_class=HTMLResponse)
+async def upload_page():
+    """Serve the pastor video upload page."""
+    global _UPLOAD_PAGE
+    if _UPLOAD_PAGE is None:
+        html_path = os.path.join(os.path.dirname(__file__), "static", "upload.html")
+        with open(html_path, "r", encoding="utf-8") as f:
+            _UPLOAD_PAGE = f.read()
+    return HTMLResponse(content=_UPLOAD_PAGE)
+
+
+class FormSubmit(BaseModel):
+    title: str
+    language: str
+    file_id: str
+    download_url: str
+
+
+@app.post("/submit-form", status_code=200)
+async def submit_form(req: FormSubmit):
+    """Relay pastor form data to n8n webhook (server-side to avoid CORS)."""
+    if not settings.N8N_FORM_WEBHOOK_URL:
+        raise HTTPException(status_code=503, detail="Webhook URL not configured")
+    payload = {"title": req.title, "language": req.language,
+                "file_id": req.file_id, "download_url": req.download_url}
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(settings.N8N_FORM_WEBHOOK_URL, json=payload)
+        if r.status_code >= 400:
+            logger.error("n8n webhook error %s: %s", r.status_code, r.text)
+            raise HTTPException(status_code=502, detail="Pipeline trigger failed")
+    logger.info("Form submitted: %s [%s] → %s", req.title, req.language, req.file_id)
+    return {"status": "queued"}
+
 
 
 @app.post("/upload-temp")

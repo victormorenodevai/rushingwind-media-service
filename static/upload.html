@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subir video — RushingWind</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f7;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      width: 100%;
+      max-width: 480px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    }
+    .logo { font-size: 12px; font-weight: 700; color: #9b7fe8; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px; }
+    h1 { font-size: 22px; font-weight: 700; color: #111; margin-bottom: 4px; }
+    .subtitle { font-size: 14px; color: #666; margin-bottom: 28px; line-height: 1.5; }
+    .field { margin-bottom: 16px; }
+    label { display: block; font-size: 13px; font-weight: 600; color: #333; margin-bottom: 6px; }
+    input[type="text"], select {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 10px;
+      font-size: 15px;
+      color: #111;
+      background: white;
+      outline: none;
+      transition: border-color 0.2s;
+      -webkit-appearance: none;
+    }
+    input[type="text"]:focus, select:focus { border-color: #6B4FBB; }
+    .file-picker {
+      border: 2px dashed #e0e0e0;
+      border-radius: 10px;
+      padding: 28px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    .file-picker:hover, .file-picker.has-file { border-color: #6B4FBB; background: #f9f5ff; }
+    .file-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+    .file-icon { font-size: 36px; margin-bottom: 10px; }
+    .file-label { font-size: 14px; color: #666; }
+    .file-name { font-size: 13px; color: #6B4FBB; font-weight: 600; margin-top: 6px; word-break: break-all; }
+    .progress-wrap { margin-top: 20px; display: none; }
+    .progress-bar-bg { background: #eee; border-radius: 99px; height: 8px; overflow: hidden; }
+    .progress-bar { background: linear-gradient(90deg, #6B4FBB, #9b7fe8); height: 100%; width: 0%; transition: width 0.2s; border-radius: 99px; }
+    .progress-text { font-size: 12px; color: #666; margin-top: 8px; text-align: center; }
+    .btn {
+      width: 100%;
+      padding: 15px;
+      background: #6B4FBB;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 22px;
+      transition: opacity 0.2s, background 0.2s;
+      letter-spacing: 0.01em;
+    }
+    .btn:hover { background: #5a3fa8; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .result { margin-top: 20px; padding: 16px 18px; border-radius: 10px; font-size: 14px; display: none; line-height: 1.5; }
+    .result.success { background: #f0faf0; color: #1f6b1f; border: 1px solid #b0ddb0; }
+    .result.error { background: #fff4f4; color: #8b0000; border: 1px solid #f5b8b8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">RushingWind</div>
+    <h1>Subir video</h1>
+    <p class="subtitle">Sube tu mensaje y lo procesamos con música, subtítulos y logo automáticamente.</p>
+
+    <form id="form">
+      <div class="field">
+        <label for="title">Título del video</label>
+        <input type="text" id="title" placeholder="Ej: Domingo 01 Junio 2026" required>
+      </div>
+
+      <div class="field">
+        <label for="language">Idioma</label>
+        <select id="language" required>
+          <option value="">Selecciona el idioma</option>
+          <option value="español">Español</option>
+          <option value="portugues">Portugués</option>
+          <option value="ingles">Inglés</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Video del mensaje</label>
+        <div class="file-picker" id="filePicker">
+          <input type="file" id="video" accept=".mp4,.mov,video/*" required>
+          <div class="file-icon">🎥</div>
+          <div class="file-label">Toca para seleccionar el video</div>
+          <div class="file-name" id="fileName"></div>
+        </div>
+      </div>
+
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-bar-bg">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="progress-text" id="progressText">Preparando...</div>
+      </div>
+
+      <button class="btn" type="submit" id="submitBtn">Enviar video</button>
+    </form>
+
+    <div class="result" id="result"></div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const filePicker = $('filePicker');
+    const videoInput = $('video');
+    const fileName   = $('fileName');
+    const progressWrap = $('progressWrap');
+    const progressBar  = $('progressBar');
+    const progressText = $('progressText');
+    const submitBtn  = $('submitBtn');
+    const resultDiv  = $('result');
+    const form       = $('form');
+
+    videoInput.addEventListener('change', () => {
+      const file = videoInput.files[0];
+      if (file) {
+        fileName.textContent = file.name;
+        filePicker.classList.add('has-file');
+      }
+    });
+
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const title    = $('title').value.trim();
+      const language = $('language').value;
+      const file     = videoInput.files[0];
+      if (!title || !language || !file) return;
+
+      submitBtn.disabled = true;
+      resultDiv.style.display = 'none';
+      progressWrap.style.display = 'block';
+      progressBar.style.width = '0%';
+      progressText.textContent = 'Subiendo video...';
+
+      try {
+        // Step 1: upload video directly to media service (with progress)
+        const formData = new FormData();
+        formData.append('file', file);
+        const upload = await xhrUpload(
+          '/upload-temp',
+          formData,
+          pct => {
+            progressBar.style.width = pct + '%';
+            progressText.textContent = `Subiendo... ${pct}%`;
+          }
+        );
+
+        progressBar.style.width = '100%';
+        progressText.textContent = 'Video recibido. Iniciando producción...';
+
+        // Step 2: notify pipeline (media service calls n8n server-side)
+        const res = await fetch('/submit-form', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            language,
+            file_id: upload.file_id,
+            download_url: upload.download_url,
+          }),
+        });
+        if (!res.ok) throw new Error('submit-form ' + res.status);
+
+        progressWrap.style.display = 'none';
+        resultDiv.className = 'result success';
+        resultDiv.innerHTML = '✅ <strong>¡Recibido!</strong> Tu video está siendo procesado. Recibirás una notificación cuando esté listo.';
+        resultDiv.style.display = 'block';
+        form.reset();
+        fileName.textContent = '';
+        filePicker.classList.remove('has-file');
+
+      } catch (err) {
+        console.error(err);
+        progressWrap.style.display = 'none';
+        resultDiv.className = 'result error';
+        resultDiv.textContent = 'Error al enviar el video. Por favor intenta de nuevo.';
+        resultDiv.style.display = 'block';
+        submitBtn.disabled = false;
+      }
+    });
+
+    function xhrUpload(url, formData, onProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100));
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+          else reject(new Error('HTTP ' + xhr.status));
+        };
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.send(formData);
+      });
+    }
+  </script>
+</body>
+</html>
