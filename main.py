@@ -160,12 +160,31 @@ async def pick_music(req: MusicPickRequest):
         else:
             song_name = f"song_{library_count + 1:03d}.mp3"
             dest_path = os.path.join(settings.MUSIC_DIR, song_name)
-            await kie_music.generate_and_download(
-                req.music_style_prompt,
-                dest_path,
-                settings.KIE_API_KEY,
-                timeout_seconds=settings.KIE_POLL_TIMEOUT,
-            )
+            try:
+                await kie_music.generate_and_download(
+                    req.music_style_prompt,
+                    dest_path,
+                    settings.KIE_API_KEY,
+                    timeout_seconds=settings.KIE_POLL_TIMEOUT,
+                )
+            except Exception as kie_exc:
+                if tracks:
+                    # KIE failed (quota/timeout) but we have existing tracks — reuse one
+                    logger.warning("KIE generation failed, falling back to library: %s", kie_exc)
+                    track = random.choice(tracks)
+                    async with get_session() as session:
+                        t = await session.get(MusicTrack, track.id)
+                        t.times_used += 1
+                        session.add(t)
+                        await session.commit()
+                    return MusicPickResponse(
+                        music_filename=track.filename,
+                        music_track_id=track.id,
+                        reused=True,
+                        library_count=library_count,
+                    )
+                raise  # library is empty and KIE failed — nothing to fall back to
+
             async with get_session() as session:
                 track = MusicTrack(filename=song_name, created_at=datetime.utcnow())
                 session.add(track)
