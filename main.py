@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlmodel import select
 
@@ -105,6 +105,17 @@ async def delete_file(file_id: str):
     if os.path.exists(path):
         os.remove(path)
         logger.info("Deleted temp file: %s", file_id)
+
+
+@app.post("/upload-temp")
+async def upload_temp(file: UploadFile = File(...)):
+    """Accept a pastor video upload (from n8n Form) and store it temporarily."""
+    file_id = str(uuid.uuid4())
+    path = os.path.join(settings.STORAGE_DIR, f"{file_id}.mp4")
+    with open(path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    logger.info("Temp upload saved: %s (%s)", file_id, file.filename)
+    return {"file_id": file_id, "download_url": f"{settings.BASE_URL}/files/{file_id}"}
 
 
 @app.get("/music/{filename}")
