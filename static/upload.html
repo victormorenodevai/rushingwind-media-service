@@ -136,6 +136,7 @@
     const submitBtn  = $('submitBtn');
     const resultDiv  = $('result');
     const form       = $('form');
+    const chatId     = new URLSearchParams(window.location.search).get('chat_id') || '';
 
     videoInput.addEventListener('change', () => {
       const file = videoInput.files[0];
@@ -183,6 +184,7 @@
             language,
             file_id: upload.file_id,
             download_url: upload.download_url,
+            chat_id: chatId,
           }),
         });
         if (!res.ok) throw new Error('submit-form ' + res.status);

@@ -129,6 +129,7 @@ class FormSubmit(BaseModel):
     language: str
     file_id: str
     download_url: str
+    chat_id: str = ""
 
 
 @app.post("/submit-form", status_code=200)
@@ -137,7 +138,8 @@ async def submit_form(req: FormSubmit):
     if not settings.N8N_FORM_WEBHOOK_URL:
         raise HTTPException(status_code=503, detail="Webhook URL not configured")
     payload = {"title": req.title, "language": req.language,
-                "file_id": req.file_id, "download_url": req.download_url}
+                "file_id": req.file_id, "download_url": req.download_url,
+                "chat_id": req.chat_id}
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.post(settings.N8N_FORM_WEBHOOK_URL, json=payload)
         if r.status_code >= 400:
