@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import random
@@ -36,6 +37,8 @@ async def lifespan(app: FastAPI):
     if db_engine is not None:
         await init_db()
         logger.info("Database tables ready")
+    # Pre-load Whisper model in a thread pool — keeps event loop free during 3GB download
+    asyncio.get_running_loop().run_in_executor(None, subtitles._get_model)
     yield
 
 
@@ -302,28 +305,28 @@ async def produce_video(req: VideoRequest):
             steps_done.append("kie_music_new")
         logger.info("[%s] Music ready", req.language)
 
-        # Step 4: Trim + mix
-        video_duration = ffmpeg_mixer.get_duration(raw_video_path)
+        # Step 4: Trim + mix (blocking — run in thread pool)
+        video_duration = await asyncio.to_thread(ffmpeg_mixer.get_duration, raw_video_path)
         music_trim_path = os.path.join(tmp_dir, "music_trim.mp3")
-        ffmpeg_mixer.trim_audio(music_full_path, music_trim_path, video_duration + 2.0)
+        await asyncio.to_thread(ffmpeg_mixer.trim_audio, music_full_path, music_trim_path, video_duration + 2.0)
         temp_files.append(music_trim_path)
 
         mixed_path = os.path.join(tmp_dir, "mixed.mp4")
-        ffmpeg_mixer.mix_audio(raw_video_path, music_trim_path, mixed_path)
+        await asyncio.to_thread(ffmpeg_mixer.mix_audio, raw_video_path, music_trim_path, mixed_path)
         temp_files.append(mixed_path)
         steps_done.append("ffmpeg_mix")
         logger.info("[%s] FFmpeg mix done", req.language)
 
-        # Step 5: Subtitles
+        # Step 5: Subtitles (blocking — run in thread pool)
         ass_path = os.path.join(tmp_dir, "subs.ass")
-        subtitles.generate_ass(raw_video_path, req.language_code, ass_path)
+        await asyncio.to_thread(subtitles.generate_ass, raw_video_path, req.language_code, ass_path)
         temp_files.append(ass_path)
         steps_done.append("subtitles")
         logger.info("[%s] Subtitles done", req.language)
 
         # Step 6: Burn subtitles
         subs_path = os.path.join(tmp_dir, "subs_burned.mp4")
-        ffmpeg_mixer.burn_subtitles(mixed_path, ass_path, subs_path)
+        await asyncio.to_thread(ffmpeg_mixer.burn_subtitles, mixed_path, ass_path, subs_path)
         temp_files.append(subs_path)
         steps_done.append("ffmpeg_burn")
 
@@ -331,7 +334,7 @@ async def produce_video(req: VideoRequest):
         upload_path = subs_path
         if settings.LOGO_PATH and os.path.exists(settings.LOGO_PATH):
             wm_path = os.path.join(tmp_dir, "watermarked.mp4")
-            ffmpeg_mixer.add_watermark(subs_path, settings.LOGO_PATH, wm_path)
+            await asyncio.to_thread(ffmpeg_mixer.add_watermark, subs_path, settings.LOGO_PATH, wm_path)
             temp_files.append(wm_path)
             upload_path = wm_path
             steps_done.append("watermark")
@@ -403,26 +406,26 @@ async def process_video(req: ProcessVideoRequest):
             temp_files.append(music_full_path)
             steps_done.append("kie_music_new")
 
-        # Step 3: Trim + mix
-        video_duration = ffmpeg_mixer.get_duration(input_path)
+        # Step 3: Trim + mix (all ffmpeg calls are blocking — run in thread pool)
+        video_duration = await asyncio.to_thread(ffmpeg_mixer.get_duration, input_path)
         music_trim_path = os.path.join(tmp_dir, "music_trim.mp3")
-        ffmpeg_mixer.trim_audio(music_full_path, music_trim_path, video_duration + 2.0)
+        await asyncio.to_thread(ffmpeg_mixer.trim_audio, music_full_path, music_trim_path, video_duration + 2.0)
         temp_files.append(music_trim_path)
 
         mixed_path = os.path.join(tmp_dir, "mixed.mp4")
-        ffmpeg_mixer.mix_audio(input_path, music_trim_path, mixed_path)
+        await asyncio.to_thread(ffmpeg_mixer.mix_audio, input_path, music_trim_path, mixed_path)
         temp_files.append(mixed_path)
         steps_done.append("ffmpeg_mix")
 
-        # Step 4: Subtitles
+        # Step 4: Subtitles (Whisper model load + inference are blocking — run in thread pool)
         ass_path = os.path.join(tmp_dir, "subs.ass")
-        subtitles.generate_ass(input_path, req.language_code, ass_path)
+        await asyncio.to_thread(subtitles.generate_ass, input_path, req.language_code, ass_path)
         temp_files.append(ass_path)
         steps_done.append("subtitles")
 
         # Step 5: Burn subtitles
         subs_path = os.path.join(tmp_dir, "subs_burned.mp4")
-        ffmpeg_mixer.burn_subtitles(mixed_path, ass_path, subs_path)
+        await asyncio.to_thread(ffmpeg_mixer.burn_subtitles, mixed_path, ass_path, subs_path)
         temp_files.append(subs_path)
         steps_done.append("ffmpeg_burn")
 
@@ -430,7 +433,7 @@ async def process_video(req: ProcessVideoRequest):
         upload_path = subs_path
         if settings.LOGO_PATH and os.path.exists(settings.LOGO_PATH):
             wm_path = os.path.join(tmp_dir, "watermarked.mp4")
-            ffmpeg_mixer.add_watermark(subs_path, settings.LOGO_PATH, wm_path)
+            await asyncio.to_thread(ffmpeg_mixer.add_watermark, subs_path, settings.LOGO_PATH, wm_path)
             temp_files.append(wm_path)
             upload_path = wm_path
             steps_done.append("watermark")
