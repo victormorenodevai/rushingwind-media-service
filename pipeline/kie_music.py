@@ -47,7 +47,10 @@ async def _submit_music(style_prompt: str, api_key: str) -> str:
         raise RuntimeError(f"KIE submit failed ({resp.status_code}): {resp.text[:300]}")
 
     data = resp.json()
-    task_id = data.get("data", {}).get("taskId") or data.get("taskId")
+    logger.info("KIE submit response: %s", resp.text[:500])
+    if not data:
+        raise RuntimeError(f"KIE returned empty response: {resp.text[:300]}")
+    task_id = (data.get("data") or {}).get("taskId") or data.get("taskId")
     if not task_id:
         raise RuntimeError(f"KIE returned no taskId: {data}")
 
