@@ -55,8 +55,9 @@ class ProductionCreate(BaseModel):
     language: str
     language_code: str
     title: str
-    video_url: str             # Google Drive URL
+    video_url: str             # Google Drive URL (archive/backup)
     video_drive_file_id: str   # Drive file ID
+    video_download_url: str | None = None  # media-service URL (consumed by social publisher)
     music_track_id: int | None = None
     music_reused: bool = False
     pipeline_seconds: int = 0

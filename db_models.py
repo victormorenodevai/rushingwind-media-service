@@ -23,6 +23,7 @@ class Production(SQLModel, table=True):
     title: str
     video_url: str
     video_drive_file_id: str
+    video_download_url: str | None = Field(default=None)
     music_track_id: int | None = Field(default=None, foreign_key="music_tracks.id")
     music_reused: bool = Field(default=False)
     pipeline_seconds: int = Field(default=0)

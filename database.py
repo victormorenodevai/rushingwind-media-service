@@ -31,6 +31,9 @@ async def init_db() -> None:
         await conn.execute(text(
             "ALTER TABLE music_tracks ADD COLUMN IF NOT EXISTS audio_url TEXT"
         ))
+        await conn.execute(text(
+            "ALTER TABLE productions ADD COLUMN IF NOT EXISTS video_download_url TEXT"
+        ))
 
 
 @asynccontextmanager

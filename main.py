@@ -78,6 +78,7 @@ async def create_production(req: ProductionCreate):
             title=req.title,
             video_url=req.video_url,
             video_drive_file_id=req.video_drive_file_id,
+            video_download_url=req.video_download_url,
             music_track_id=req.music_track_id,
             music_reused=req.music_reused,
             pipeline_seconds=req.pipeline_seconds,
